@@ -280,6 +280,9 @@ body {
 
 .hm-months span { grid-row: 1; white-space: nowrap; }
 
+/* Second half-year row on narrow screens */
+.heatmap + .hm-months { margin-top: 12px; }
+
 .heatmap {
   display: grid;
   grid-auto-flow: column;
@@ -300,7 +303,8 @@ body {
   cursor: pointer;
 }
 
-.hm-cell.future { visibility: hidden; pointer-events: none; }
+.hm-cell.pad { visibility: hidden; pointer-events: none; }
+.hm-cell.future { opacity: 0.4; pointer-events: none; cursor: default; }
 .hm-cell.l1 { background: var(--cell-l1); }
 .hm-cell.l2 { background: var(--cell-l2); }
 .hm-cell.l3 { background: var(--cell-l3); }

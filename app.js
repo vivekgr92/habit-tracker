@@ -134,34 +134,35 @@ function globalStats() {
   return { total, todayDone, perfectDays, checkins, bestStreak };
 }
 
-/* ---------- Heatmap (fluid width, no horizontal scroll) ---------- */
+/* ---------- Heatmap: current calendar year (Jan–Dec), no horizontal scroll ---------- */
 
-const MIN_CELL = 11;
 const CELL_GAP = 3;
+const MIN_CELL = 8; // below this, split the year into two stacked half-year rows
 
-function weeksThatFit(width) {
-  return Math.max(8, Math.min(53, Math.floor((width + CELL_GAP) / (MIN_CELL + CELL_GAP))));
+function weekCols(segStart, segEnd) {
+  const start = addDays(segStart, -segStart.getDay());
+  return Math.round((addDays(segEnd, 6 - segEnd.getDay()) - start) / (7 * 86400000)) + 1;
 }
 
-function buildHeatmap(wrap, grid, cellClassFor, onToggle) {
-  const weeks = weeksThatFit(wrap.clientWidth || 300);
+function buildSegment(wrap, segStart, segEnd, cellClassFor, onToggle) {
   const t = today();
   const todayKey = toKey(t);
-  const endSunday = addDays(t, -t.getDay());
-  const start = addDays(endSunday, -(weeks - 1) * 7);
+  const start = addDays(segStart, -segStart.getDay());
+  const end = addDays(segEnd, 6 - segEnd.getDay());
+  const cols = weekCols(segStart, segEnd);
 
   // Month labels: label the week containing each month's 1st.
-  const prevMonths = wrap.querySelector(".hm-months");
-  if (prevMonths) prevMonths.remove();
   const months = document.createElement("div");
   months.className = "hm-months";
-  months.style.gridTemplateColumns = `repeat(${weeks}, 1fr)`;
+  months.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
   let lastLabelCol = -3;
-  for (let w = 0; w < weeks; w++) {
+  for (let w = 0; w < cols; w++) {
     const weekStart = addDays(start, w * 7);
     const weekEnd = addDays(weekStart, 6);
     const isNewMonth = weekStart.getMonth() !== weekEnd.getMonth() || weekStart.getDate() === 1;
-    if (isNewMonth && w - lastLabelCol >= 3 && w <= weeks - 2) {
+    // Only label months whose 1st actually falls inside this segment (padding weeks spill into neighbors).
+    const firstOfMonth = new Date(weekEnd.getFullYear(), weekEnd.getMonth(), 1);
+    if (isNewMonth && firstOfMonth >= segStart && firstOfMonth <= segEnd && w - lastLabelCol >= 3 && w <= cols - 2) {
       const label = document.createElement("span");
       label.textContent = MONTHS[weekEnd.getMonth()];
       label.style.gridColumn = `${w + 1} / span 3`;
@@ -169,17 +170,18 @@ function buildHeatmap(wrap, grid, cellClassFor, onToggle) {
       lastLabelCol = w;
     }
   }
-  wrap.insertBefore(months, grid);
 
-  grid.textContent = "";
+  const grid = document.createElement("div");
+  grid.className = "heatmap";
   const frag = document.createDocumentFragment();
-  const end = addDays(endSunday, 6);
 
   for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
     const key = toKey(d);
     const cell = document.createElement(onToggle ? "button" : "span");
     cell.className = "hm-cell";
-    if (d > t) {
+    if (d < segStart || d > segEnd) {
+      cell.classList.add("pad"); // filler day outside the segment, keeps week columns aligned
+    } else if (d > t) {
       cell.classList.add("future");
     } else {
       const cls = cellClassFor(key);
@@ -195,6 +197,27 @@ function buildHeatmap(wrap, grid, cellClassFor, onToggle) {
     frag.appendChild(cell);
   }
   grid.appendChild(frag);
+  wrap.append(months, grid);
+}
+
+function buildHeatmap(wrap, cellClassFor, onToggle) {
+  wrap.textContent = "";
+  const year = today().getFullYear();
+  const jan1 = new Date(year, 0, 1);
+  const jun30 = new Date(year, 5, 30);
+  const jul1 = new Date(year, 6, 1);
+  const dec31 = new Date(year, 11, 31);
+
+  const width = wrap.clientWidth || 300;
+  const fullCols = weekCols(jan1, dec31);
+  const cellPx = (width - (fullCols - 1) * CELL_GAP) / fullCols;
+
+  if (cellPx >= MIN_CELL) {
+    buildSegment(wrap, jan1, dec31, cellClassFor, onToggle);
+  } else {
+    buildSegment(wrap, jan1, jun30, cellClassFor, onToggle);
+    buildSegment(wrap, jul1, dec31, cellClassFor, onToggle);
+  }
 }
 
 /* ---------- Rendering ---------- */
@@ -253,7 +276,7 @@ function renderOverview() {
     tile(g.bestStreak, "Best streak", g.bestStreak === 1 ? "day" : "days"),
   );
 
-  buildHeatmap(overviewHeatmap.parentElement, overviewHeatmap, (key) => {
+  buildHeatmap(overviewHeatmap, (key) => {
     const done = state.habits.reduce((n, h) => n + (h.log[key] ? 1 : 0), 0);
     if (done === 0) return "";
     return `l${Math.max(1, Math.ceil((done / state.habits.length) * 4))}`;
@@ -298,9 +321,6 @@ function renderHabits() {
 
     const wrap = document.createElement("div");
     wrap.className = "heatmap-wrap";
-    const grid = document.createElement("div");
-    grid.className = "heatmap";
-    wrap.appendChild(grid);
 
     const foot = document.createElement("div");
     foot.className = "card-foot";
@@ -315,7 +335,7 @@ function renderHabits() {
     habitList.appendChild(card);
 
     // Card is in the DOM now, so the wrap has a real width to size the grid against.
-    buildHeatmap(wrap, grid, (key) => (habit.log[key] ? "done" : ""), (key) => toggleDay(habit, key));
+    buildHeatmap(wrap, (key) => (habit.log[key] ? "done" : ""), (key) => toggleDay(habit, key));
   }
 }
 
