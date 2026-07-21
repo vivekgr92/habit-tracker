@@ -41,6 +41,7 @@ function migrate(data) {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  scheduleSync();
 }
 
 function nextFreeSlot() {
@@ -486,6 +487,148 @@ importFile.addEventListener("change", async () => {
     importFile.value = "";
   }
 });
+
+/* ---------- Cloud sync (Supabase) ----------
+   Offline-first: localStorage is the source of truth. On login / app-open we
+   pull the cloud row and merge; every local change pushes shortly after. */
+
+const supa = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.supabase)
+  ? window.supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey)
+  : null;
+
+const LAST_SYNC_KEY = "habit-tracker-last-sync";
+let syncTimer = null;
+let syncing = false;
+
+const authForms = document.getElementById("authForms");
+const accountInfo = document.getElementById("accountInfo");
+const syncUnconfigured = document.getElementById("syncUnconfigured");
+const authError = document.getElementById("authError");
+const syncStatus = document.getElementById("syncStatus");
+
+/* Merge incoming data into local: match habits by id (then name), union their logs. */
+function mergeStates(local, incoming) {
+  for (const inc of incoming.habits) {
+    const mine = local.habits.find((h) => h.id === inc.id) ||
+                 local.habits.find((h) => h.name.toLowerCase() === inc.name.toLowerCase());
+    if (mine) {
+      Object.assign(mine.log, inc.log);
+      if (inc.createdAt && (!mine.createdAt || inc.createdAt < mine.createdAt)) mine.createdAt = inc.createdAt;
+    } else {
+      local.habits.push(inc);
+    }
+  }
+}
+
+function setSyncStatus(msg) {
+  if (syncStatus) syncStatus.textContent = msg;
+}
+
+async function cloudSync() {
+  if (!supa || syncing) return;
+  const { data: { session } } = await supa.auth.getSession();
+  if (!session) return;
+
+  syncing = true;
+  setSyncStatus("Syncing…");
+  try {
+    const lastSync = localStorage.getItem(LAST_SYNC_KEY) || "";
+    const { data: row, error: pullErr } = await supa
+      .from("habit_data").select("data, updated_at").eq("user_id", session.user.id).maybeSingle();
+    if (pullErr) throw pullErr;
+
+    // Merge in remote changes made since we last synced (or everything on first sync).
+    if (row && (!lastSync || row.updated_at > lastSync)) {
+      mergeStates(state, migrate(row.data));
+      saveState();
+      render();
+    }
+
+    const now = new Date().toISOString();
+    const { error: pushErr } = await supa
+      .from("habit_data")
+      .upsert({ user_id: session.user.id, data: state, updated_at: now });
+    if (pushErr) throw pushErr;
+
+    localStorage.setItem(LAST_SYNC_KEY, now);
+    setSyncStatus(`Last synced ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+  } catch (e) {
+    setSyncStatus("Sync failed — will retry on next change");
+  } finally {
+    syncing = false;
+  }
+}
+
+function scheduleSync() {
+  if (!supa) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(cloudSync, 2000);
+}
+
+function updateAccountUI(session) {
+  if (!supa) {
+    authForms.hidden = true;
+    accountInfo.hidden = true;
+    syncUnconfigured.hidden = false;
+    return;
+  }
+  authForms.hidden = !!session;
+  accountInfo.hidden = !session;
+  if (session) {
+    document.getElementById("accountEmail").textContent = `Signed in as ${session.user.email}`;
+    const last = localStorage.getItem(LAST_SYNC_KEY);
+    setSyncStatus(last ? `Last synced ${new Date(last).toLocaleString()}` : "Not synced yet");
+  }
+}
+
+if (supa) {
+  supa.auth.onAuthStateChange((event, session) => {
+    updateAccountUI(session);
+    if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
+      if (session) cloudSync();
+    }
+  });
+
+  document.getElementById("signInBtn").addEventListener("click", () => authAction("signInWithPassword"));
+  document.getElementById("signUpBtn").addEventListener("click", () => authAction("signUp"));
+
+  document.getElementById("signOutBtn").addEventListener("click", async () => {
+    await supa.auth.signOut();
+    localStorage.removeItem(LAST_SYNC_KEY);
+    toast("Signed out — data stays on this device");
+  });
+
+  document.getElementById("syncNowBtn").addEventListener("click", cloudSync);
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) cloudSync();
+  });
+} else {
+  updateAccountUI(null);
+}
+
+async function authAction(method) {
+  const email = document.getElementById("authEmail").value.trim();
+  const password = document.getElementById("authPassword").value;
+  authError.hidden = true;
+  if (!email || password.length < 6) {
+    authError.textContent = "Enter an email and a password of at least 6 characters.";
+    authError.hidden = false;
+    return;
+  }
+  const { data, error } = await supa.auth[method]({ email, password });
+  if (error) {
+    authError.textContent = error.message;
+    authError.hidden = false;
+    return;
+  }
+  if (method === "signUp" && data.user && !data.session) {
+    authError.textContent = "Check your email to confirm the account, then sign in.";
+    authError.hidden = false;
+    return;
+  }
+  toast(method === "signUp" ? "Account created ✓" : "Signed in ✓");
+}
 
 /* ---------- Toast ---------- */
 

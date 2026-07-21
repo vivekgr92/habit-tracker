@@ -107,12 +107,42 @@
   <!-- Settings dialog -->
   <dialog id="settingsDialog">
     <h2>Settings</h2>
+
+    <div class="account-box" id="accountBox">
+      <h3 class="account-title">☁️ Cloud sync</h3>
+      <div id="authForms">
+        <label class="field">
+          <span>Email</span>
+          <input type="email" id="authEmail" placeholder="you@example.com" autocomplete="username">
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" id="authPassword" placeholder="••••••••" minlength="6" autocomplete="current-password">
+        </label>
+        <p class="auth-error small" id="authError" hidden></p>
+        <div class="auth-actions">
+          <button class="btn btn-primary" id="signInBtn" type="button">Sign in</button>
+          <button class="btn" id="signUpBtn" type="button">Create account</button>
+        </div>
+        <p class="muted small">Sign in with the same account on every device and your habits sync automatically.</p>
+      </div>
+      <div id="accountInfo" hidden>
+        <p class="small" id="accountEmail"></p>
+        <p class="muted small" id="syncStatus"></p>
+        <div class="auth-actions">
+          <button class="btn" id="syncNowBtn" type="button">Sync now</button>
+          <button class="btn" id="signOutBtn" type="button">Sign out</button>
+        </div>
+      </div>
+      <p class="muted small" id="syncUnconfigured" hidden>Cloud sync isn't configured for this deployment.</p>
+    </div>
+
     <div class="settings-list">
       <button class="btn" id="exportBtn">Export data (JSON)</button>
       <button class="btn" id="importBtn">Import data</button>
       <input type="file" id="importFile" accept="application/json" hidden>
     </div>
-    <p class="muted small">Data is stored locally on this device. Export regularly if you care about it.</p>
+    <p class="muted small">Data always lives on this device first and works offline; cloud sync keeps devices in step. Export gives you a backup file.</p>
     <div class="dialog-actions">
       <span class="spacer"></span>
       <button class="btn" id="closeSettingsBtn">Close</button>
@@ -121,6 +151,8 @@
 
   <div class="toast" id="toast" role="status"></div>
 
+  <script src="libs/supabase.js"></script>
+  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

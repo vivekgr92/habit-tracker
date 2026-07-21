@@ -1,11 +1,13 @@
 "use strict";
 
-const CACHE_NAME = "habits-v3";
+const CACHE_NAME = "habits-v4";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./config.js",
+  "./libs/supabase.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",

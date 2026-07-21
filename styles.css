@@ -542,6 +542,26 @@ dialog h2 { margin: 0 0 16px; font-size: 17px; }
 .settings-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .settings-list .btn { text-align: center; }
 
+.account-box {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.account-title { margin: 0 0 10px; font-size: 14px; }
+
+.account-box .field input { background: var(--card); }
+
+.auth-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.auth-actions .btn { flex: 1; }
+
+.auth-error { color: var(--danger); margin: 0 0 8px; }
+
+#accountEmail { margin: 0 0 2px; font-weight: 600; }
+#syncStatus { margin: 0 0 10px; }
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed;
