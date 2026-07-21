@@ -5,7 +5,17 @@
 const STORAGE_KEY = "habit-tracker-v1";
 
 const EMOJIS = ["✅", "💪", "📚", "🏃", "🧘", "💧", "🥗", "😴", "✍️", "🎸", "🧠", "🚭", "💊", "🌱", "🧹", "💻"];
-const COLORS = ["#39d353", "#2f81f7", "#a371f7", "#f778ba", "#f0883e", "#e3b341", "#33b3ae", "#f85149"];
+const SLOT_COUNT = 8;
+
+// Legacy hex colors (v1 data) → palette slot
+const LEGACY_COLOR_SLOTS = {
+  "#39d353": 4, "#2f81f7": 1, "#a371f7": 5, "#f778ba": 7,
+  "#f0883e": 8, "#e3b341": 3, "#33b3ae": 2, "#f85149": 6,
+};
+
+function hueVar(slot) {
+  return `var(--hue-${slot})`;
+}
 
 let state = loadState();
 
@@ -14,14 +24,29 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.habits)) return parsed;
+      if (parsed && Array.isArray(parsed.habits)) return migrate(parsed);
     }
   } catch (e) { /* corrupted data falls through to fresh state */ }
-  return { version: 1, habits: [] };
+  return { version: 2, habits: [] };
+}
+
+function migrate(data) {
+  for (const h of data.habits) {
+    if (typeof h.color === "string") h.color = LEGACY_COLOR_SLOTS[h.color] || 1;
+    if (!h.color || h.color < 1 || h.color > SLOT_COUNT) h.color = 1;
+  }
+  data.version = 2;
+  return data;
 }
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function nextFreeSlot() {
+  const used = new Set(state.habits.map((h) => h.color));
+  for (let s = 1; s <= SLOT_COUNT; s++) if (!used.has(s)) return s;
+  return ((state.habits.length) % SLOT_COUNT) + 1;
 }
 
 /* ---------- Date helpers (all local time) ---------- */
@@ -52,17 +77,12 @@ function prettyDate(key) {
   return `${MONTHS[m - 1]} ${d}, ${y}`;
 }
 
-/* Start of the heatmap window: the Sunday that begins the week 52 weeks ago (GitHub-style). */
-function gridStart() {
-  const t = today();
-  const start = addDays(t, -364);
-  return addDays(start, -start.getDay());
-}
+/* ---------- Stats ---------- */
 
-/* ---------- Streaks & stats ---------- */
-
-function streaks(log) {
+function habitStats(habit) {
+  const log = habit.log;
   const t = today();
+
   let current = 0;
   // Today not done yet doesn't break the streak — start counting from yesterday in that case.
   let cursor = log[toKey(t)] ? t : addDays(t, -1);
@@ -81,64 +101,89 @@ function streaks(log) {
     prev = new Date(y, m - 1, d);
   }
 
-  return { current, best, total: doneKeys.length };
+  const monthPrefix = toKey(t).slice(0, 8);
+  const monthCount = doneKeys.filter((k) => k.startsWith(monthPrefix)).length;
+  const monthDays = t.getDate();
+
+  let done30 = 0;
+  for (let i = 0; i < 30; i++) if (log[toKey(addDays(t, -i))]) done30++;
+
+  return { current, best, total: doneKeys.length, monthCount, monthDays, rate30: Math.round((done30 / 30) * 100) };
 }
 
-/* ---------- Rendering ---------- */
-
-const habitList = document.getElementById("habitList");
-const emptyState = document.getElementById("emptyState");
-const overviewCard = document.getElementById("overviewCard");
-const overviewHeatmap = document.getElementById("overviewHeatmap");
-const overviewSubtitle = document.getElementById("overviewSubtitle");
-
-function render() {
-  const has = state.habits.length > 0;
-  emptyState.hidden = has;
-  overviewCard.hidden = state.habits.length < 2;
-
-  if (state.habits.length >= 2) renderOverview();
-  renderHabits();
-}
-
-function buildMonthLabels(container, start, end) {
-  const months = document.createElement("div");
-  months.className = "hm-months";
-  let lastLabelCol = -3;
-  for (let d = new Date(start), week = 0; d <= end; d = addDays(d, 7), week++) {
-    // Label a week when it contains the 1st of a month (or is the very first week).
-    const weekEnd = addDays(d, 6);
-    const isNewMonth = d.getDate() <= 7 || d.getMonth() !== weekEnd.getMonth();
-    if ((week === 0 || isNewMonth) && week - lastLabelCol >= 3) {
-      const label = document.createElement("span");
-      label.textContent = MONTHS[weekEnd.getMonth()];
-      label.style.gridColumn = `${week + 1} / span 3`;
-      months.appendChild(label);
-      lastLabelCol = week;
-    }
-  }
-  const prev = container.parentElement.querySelector(".hm-months");
-  if (prev) prev.remove();
-  container.parentElement.insertBefore(months, container);
-}
-
-function buildHeatmap(container, getLevel, onToggle) {
-  container.textContent = "";
-  const start = gridStart();
+function globalStats() {
   const t = today();
   const todayKey = toKey(t);
-  buildMonthLabels(container, start, t);
-  const frag = document.createDocumentFragment();
+  const total = state.habits.length;
+  const todayDone = state.habits.filter((h) => h.log[todayKey]).length;
 
-  for (let d = new Date(start); ; d = addDays(d, 1)) {
+  let perfectDays = 0;
+  for (let i = 0; i < 365; i++) {
+    const key = toKey(addDays(t, -i));
+    const existing = state.habits.filter((h) => !h.createdAt || h.createdAt <= key);
+    if (existing.length && existing.every((h) => h.log[key])) perfectDays++;
+  }
+
+  let checkins = 0, bestStreak = 0;
+  for (const h of state.habits) {
+    const s = habitStats(h);
+    checkins += s.total;
+    bestStreak = Math.max(bestStreak, s.best);
+  }
+
+  return { total, todayDone, perfectDays, checkins, bestStreak };
+}
+
+/* ---------- Heatmap (fluid width, no horizontal scroll) ---------- */
+
+const MIN_CELL = 11;
+const CELL_GAP = 3;
+
+function weeksThatFit(width) {
+  return Math.max(8, Math.min(53, Math.floor((width + CELL_GAP) / (MIN_CELL + CELL_GAP))));
+}
+
+function buildHeatmap(wrap, grid, cellClassFor, onToggle) {
+  const weeks = weeksThatFit(wrap.clientWidth || 300);
+  const t = today();
+  const todayKey = toKey(t);
+  const endSunday = addDays(t, -t.getDay());
+  const start = addDays(endSunday, -(weeks - 1) * 7);
+
+  // Month labels: label the week containing each month's 1st.
+  const prevMonths = wrap.querySelector(".hm-months");
+  if (prevMonths) prevMonths.remove();
+  const months = document.createElement("div");
+  months.className = "hm-months";
+  months.style.gridTemplateColumns = `repeat(${weeks}, 1fr)`;
+  let lastLabelCol = -3;
+  for (let w = 0; w < weeks; w++) {
+    const weekStart = addDays(start, w * 7);
+    const weekEnd = addDays(weekStart, 6);
+    const isNewMonth = weekStart.getMonth() !== weekEnd.getMonth() || weekStart.getDate() === 1;
+    if (isNewMonth && w - lastLabelCol >= 3 && w <= weeks - 2) {
+      const label = document.createElement("span");
+      label.textContent = MONTHS[weekEnd.getMonth()];
+      label.style.gridColumn = `${w + 1} / span 3`;
+      months.appendChild(label);
+      lastLabelCol = w;
+    }
+  }
+  wrap.insertBefore(months, grid);
+
+  grid.textContent = "";
+  const frag = document.createDocumentFragment();
+  const end = addDays(endSunday, 6);
+
+  for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
     const key = toKey(d);
     const cell = document.createElement(onToggle ? "button" : "span");
     cell.className = "hm-cell";
     if (d > t) {
       cell.classList.add("future");
     } else {
-      const level = getLevel(key);
-      if (level > 0) cell.classList.add(`l${level}`);
+      const cls = cellClassFor(key);
+      if (cls) cell.classList.add(cls);
       if (key === todayKey) cell.classList.add("today");
       cell.title = prettyDate(key);
       if (onToggle) {
@@ -148,29 +193,71 @@ function buildHeatmap(container, getLevel, onToggle) {
       }
     }
     frag.appendChild(cell);
-    // Stop once we complete the week that contains today.
-    if (d >= t && d.getDay() === 6) break;
   }
+  grid.appendChild(frag);
+}
 
-  container.appendChild(frag);
-  // Show the most recent weeks first.
-  requestAnimationFrame(() => {
-    const wrap = container.parentElement;
-    wrap.scrollLeft = wrap.scrollWidth;
-  });
+/* ---------- Rendering ---------- */
+
+const habitList = document.getElementById("habitList");
+const emptyState = document.getElementById("emptyState");
+const overviewCard = document.getElementById("overviewCard");
+const overviewHeatmap = document.getElementById("overviewHeatmap");
+const overviewSubtitle = document.getElementById("overviewSubtitle");
+const globalTiles = document.getElementById("globalTiles");
+const ringFill = document.getElementById("ringFill");
+const ringText = document.getElementById("ringText");
+
+function tile(value, label, unit) {
+  const el = document.createElement("div");
+  el.className = "tile";
+  const v = document.createElement("span");
+  v.className = "tile-value";
+  v.textContent = value;
+  if (unit) {
+    const u = document.createElement("span");
+    u.className = "unit";
+    u.textContent = ` ${unit}`;
+    v.appendChild(u);
+  }
+  const l = document.createElement("span");
+  l.className = "tile-label";
+  l.textContent = label;
+  el.append(v, l);
+  return el;
+}
+
+function render() {
+  const has = state.habits.length > 0;
+  emptyState.hidden = has;
+  overviewCard.hidden = !has;
+  if (has) renderOverview();
+  renderHabits();
 }
 
 function renderOverview() {
-  const total = state.habits.length;
-  buildHeatmap(overviewHeatmap, (key) => {
-    const done = state.habits.reduce((n, h) => n + (h.log[key] ? 1 : 0), 0);
-    if (done === 0) return 0;
-    return Math.max(1, Math.ceil((done / total) * 4));
-  }, null);
+  const g = globalStats();
 
-  const todayKey = toKey(today());
-  const doneToday = state.habits.filter((h) => h.log[todayKey]).length;
-  overviewSubtitle.textContent = `${doneToday}/${total} today`;
+  const frac = g.total ? g.todayDone / g.total : 0;
+  const C = 2 * Math.PI * 26;
+  ringFill.style.strokeDasharray = `${frac * C} ${C}`;
+  ringText.textContent = `${Math.round(frac * 100)}%`;
+
+  const t = today();
+  overviewSubtitle.textContent = `${g.todayDone} of ${g.total} done · ${MONTHS[t.getMonth()]} ${t.getDate()}`;
+
+  globalTiles.textContent = "";
+  globalTiles.append(
+    tile(g.perfectDays, "Perfect days"),
+    tile(g.checkins, "Check-ins"),
+    tile(g.bestStreak, "Best streak", g.bestStreak === 1 ? "day" : "days"),
+  );
+
+  buildHeatmap(overviewHeatmap.parentElement, overviewHeatmap, (key) => {
+    const done = state.habits.reduce((n, h) => n + (h.log[key] ? 1 : 0), 0);
+    if (done === 0) return "";
+    return `l${Math.max(1, Math.ceil((done / state.habits.length) * 4))}`;
+  }, null);
 }
 
 function renderHabits() {
@@ -179,26 +266,35 @@ function renderHabits() {
 
   for (const habit of state.habits) {
     const card = document.createElement("section");
-    card.className = "card";
-    card.style.setProperty("--cell-done", habit.color);
+    card.className = "card habit-card";
+    card.style.setProperty("--hue", hueVar(habit.color));
 
-    const s = streaks(habit.log);
+    const s = habitStats(habit);
     const doneToday = !!habit.log[todayKey];
 
     const head = document.createElement("div");
     head.className = "card-head";
     head.innerHTML = `
       <div class="habit-title">
-        <span class="habit-emoji"></span>
+        <span class="emoji-chip"></span>
         <span class="habit-name"></span>
       </div>
       <div class="habit-meta">
         <span class="streak-badge ${s.current > 0 ? "hot" : ""}">🔥 ${s.current}</span>
         <button class="edit-link" type="button">Edit</button>
       </div>`;
-    head.querySelector(".habit-emoji").textContent = habit.emoji;
+    head.querySelector(".emoji-chip").textContent = habit.emoji;
     head.querySelector(".habit-name").textContent = habit.name;
     head.querySelector(".edit-link").addEventListener("click", () => openHabitDialog(habit));
+
+    const tiles = document.createElement("div");
+    tiles.className = "stat-tiles";
+    tiles.append(
+      tile(s.current, "Streak", s.current === 1 ? "day" : "days"),
+      tile(s.best, "Best", s.best === 1 ? "day" : "days"),
+      tile(`${s.monthCount}/${s.monthDays}`, "Month"),
+      tile(`${s.rate30}%`, "30 days"),
+    );
 
     const wrap = document.createElement("div");
     wrap.className = "heatmap-wrap";
@@ -206,39 +302,49 @@ function renderHabits() {
     grid.className = "heatmap";
     wrap.appendChild(grid);
 
-    buildHeatmap(grid, (key) => (habit.log[key] ? 4 : 0), (key) => toggleDay(habit, key));
-    // Tint done cells with the habit's own color.
-    grid.style.setProperty("--cell-l4", habit.color);
-
     const foot = document.createElement("div");
     foot.className = "card-foot";
-
-    const stats = document.createElement("span");
-    stats.className = "stats-line";
-    stats.textContent = `Best ${s.best} · Total ${s.total}`;
-
     const checkBtn = document.createElement("button");
     checkBtn.type = "button";
     checkBtn.className = "check-btn" + (doneToday ? " done" : "");
-    checkBtn.innerHTML = `<span class="ring"></span><span>${doneToday ? "Done today" : "Mark today"}</span>`;
-    if (doneToday) {
-      checkBtn.style.background = habit.color;
-      checkBtn.style.borderColor = habit.color;
-    }
+    checkBtn.innerHTML = `<span class="ring-dot"></span><span>${doneToday ? "Done today" : "Mark today"}</span>`;
     checkBtn.addEventListener("click", () => toggleDay(habit, todayKey));
+    foot.appendChild(checkBtn);
 
-    foot.append(stats, checkBtn);
-    card.append(head, wrap, foot);
+    card.append(head, tiles, wrap, foot);
     habitList.appendChild(card);
+
+    // Card is in the DOM now, so the wrap has a real width to size the grid against.
+    buildHeatmap(wrap, grid, (key) => (habit.log[key] ? "done" : ""), (key) => toggleDay(habit, key));
   }
 }
 
 function toggleDay(habit, key) {
-  if (habit.log[key]) delete habit.log[key];
-  else habit.log[key] = true;
+  const marking = !habit.log[key];
+  if (marking) habit.log[key] = true;
+  else delete habit.log[key];
   saveState();
   render();
+
+  if (marking && key === toKey(today())) {
+    const s = habitStats(habit);
+    toast(s.current > 1 ? `🔥 ${s.current}-day streak!` : `${habit.emoji} Nice, day one!`);
+  }
 }
+
+/* ---------- Re-render on resize (heatmap density changes) ---------- */
+
+let lastWidth = 0;
+let resizeTimer = null;
+const containerEl = document.querySelector(".container");
+
+new ResizeObserver(() => {
+  const w = containerEl.clientWidth;
+  if (w === lastWidth) return;
+  lastWidth = w;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(render, 120);
+}).observe(containerEl);
 
 /* ---------- Habit dialog ---------- */
 
@@ -252,7 +358,7 @@ const deleteHabitBtn = document.getElementById("deleteHabitBtn");
 
 let editingHabit = null;
 let selectedEmoji = EMOJIS[0];
-let selectedColor = COLORS[0];
+let selectedSlot = 1;
 
 function buildPickers() {
   emojiRow.textContent = "";
@@ -265,13 +371,13 @@ function buildPickers() {
     emojiRow.appendChild(b);
   }
   colorRow.textContent = "";
-  for (const c of COLORS) {
+  for (let slot = 1; slot <= SLOT_COUNT; slot++) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "color-opt" + (c === selectedColor ? " selected" : "");
-    b.style.background = c;
-    b.setAttribute("aria-label", c);
-    b.addEventListener("click", () => { selectedColor = c; buildPickers(); });
+    b.className = "color-opt" + (slot === selectedSlot ? " selected" : "");
+    b.style.background = hueVar(slot);
+    b.setAttribute("aria-label", `Color ${slot}`);
+    b.addEventListener("click", () => { selectedSlot = slot; buildPickers(); });
     colorRow.appendChild(b);
   }
 }
@@ -281,7 +387,7 @@ function openHabitDialog(habit) {
   dialogTitle.textContent = habit ? "Edit habit" : "New habit";
   habitNameInput.value = habit ? habit.name : "";
   selectedEmoji = habit ? habit.emoji : EMOJIS[0];
-  selectedColor = habit ? habit.color : COLORS[0];
+  selectedSlot = habit ? habit.color : nextFreeSlot();
   deleteHabitBtn.hidden = !habit;
   buildPickers();
   habitDialog.showModal();
@@ -295,13 +401,13 @@ habitForm.addEventListener("submit", (e) => {
   if (editingHabit) {
     editingHabit.name = name;
     editingHabit.emoji = selectedEmoji;
-    editingHabit.color = selectedColor;
+    editingHabit.color = selectedSlot;
   } else {
     state.habits.push({
       id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
       name,
       emoji: selectedEmoji,
-      color: selectedColor,
+      color: selectedSlot,
       createdAt: toKey(today()),
       log: {},
     });
@@ -349,7 +455,7 @@ importFile.addEventListener("change", async () => {
     const parsed = JSON.parse(await file.text());
     if (!parsed || !Array.isArray(parsed.habits)) throw new Error("bad format");
     if (!confirm(`Replace current data with ${parsed.habits.length} imported habit(s)?`)) return;
-    state = parsed;
+    state = migrate(parsed);
     saveState();
     settingsDialog.close();
     render();

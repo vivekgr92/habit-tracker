@@ -41,14 +41,21 @@
 
   <main class="container">
     <section class="card overview-card" id="overviewCard" hidden>
-      <div class="card-head">
-        <div class="habit-title">
-          <span class="habit-emoji">📊</span>
-          <span class="habit-name">All habits</span>
+      <div class="overview-head">
+        <svg class="ring" width="64" height="64" viewBox="0 0 64 64" aria-hidden="true">
+          <circle class="ring-track" cx="32" cy="32" r="26"/>
+          <circle class="ring-fill" id="ringFill" cx="32" cy="32" r="26"/>
+          <text class="ring-text" id="ringText" x="32" y="37" text-anchor="middle">0%</text>
+        </svg>
+        <div>
+          <h2 class="overview-title">Today</h2>
+          <p class="muted small" id="overviewSubtitle"></p>
         </div>
-        <span class="muted small" id="overviewSubtitle"></span>
       </div>
-      <div class="heatmap-wrap"><div class="heatmap" id="overviewHeatmap"></div></div>
+      <div class="stat-tiles" id="globalTiles"></div>
+      <div class="heatmap-wrap">
+        <div class="heatmap" id="overviewHeatmap"></div>
+      </div>
       <div class="legend">
         <span class="muted small">Less</span>
         <span class="legend-cell" style="background:var(--cell-l0)"></span>
